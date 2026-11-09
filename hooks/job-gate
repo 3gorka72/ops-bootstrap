@@ -1,0 +1,46 @@
+#!/usr/bin/python3 -I
+"""Runner job-started hook (ACTIONS_RUNNER_HOOK_JOB_STARTED) for the ops-admin runners.
+
+A repo-level runner accepts jobs from any workflow on any branch of 3gorka72/ops-admin. This gate fails the job
+before any step runs unless it is admin.yml dispatched manually on main, so a branch job can never run a step on
+the host or leave a process behind. It trusts the event payload the runner itself writes at a fixed path under
+this runner's _work/_temp (rewritten at each job start), not environment variables a workflow could set.
+Installed root-owned by install.sh with the runner directory substituted; it is not in sudoers.
+Same design as the infra ops-runner gate (3gorka72/infra tools/ops-runners/hooks/job-gate).
+"""
+import json
+import os
+import sys
+
+EVENT = "@RUNNER_DIR@/_work/_temp/_github_workflow/event.json"  # substituted at install; no env override
+REPO = "3gorka72/ops-admin"
+ALLOWED = {".github/workflows/admin.yml"}
+
+
+def refuse(msg):
+    print("ops-admin job gate: refused: " + msg, file=sys.stderr)
+    sys.exit(1)
+
+
+def main():
+    if os.environ.get("GITHUB_EVENT_NAME") != "workflow_dispatch":
+        refuse("event is not workflow_dispatch")
+    try:
+        with open(EVENT) as f:
+            ev = json.load(f)
+    except (OSError, ValueError):
+        refuse("no readable event payload")
+    if (ev.get("repository") or {}).get("full_name") != REPO:
+        refuse("repository")
+    if ev.get("ref") != "refs/heads/main":
+        refuse("ref %r is not main" % ev.get("ref"))
+    if ev.get("workflow") not in ALLOWED:
+        refuse("workflow %r not allowed" % ev.get("workflow"))
+    wref = os.environ.get("GITHUB_WORKFLOW_REF", "")
+    if wref not in {"%s/%s@refs/heads/main" % (REPO, w) for w in ALLOWED}:
+        refuse("workflow ref %r" % wref)
+    print("ops-admin job gate: ok %s" % ev.get("workflow"))
+
+
+if __name__ == "__main__":
+    main()

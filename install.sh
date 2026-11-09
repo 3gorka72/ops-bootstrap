@@ -103,6 +103,18 @@ fi
 for f in .env .path .runner .credentials; do [ -e "$DIR/$f" ] || die "нет $DIR/$f после регистрации"; done
 # The wrapper finds the runner by this exact unit name (MainPID, ControlGroup); refuse anything else.
 [ "$(cat "$DIR/.service" 2>/dev/null)" = "$UNIT" ] || die "служба сборщика называется не $UNIT; ничего не запускаю"
+# Job gate: fail any job that is not admin.yml dispatched on main before its first step (no branch-job leftovers).
+# Runner 2.338.2 accepts a hook only if its path ends in .sh and runs it with bash, so a root-owned shim execs it.
+install -d -o root -g root -m 0755 /usr/local/lib/ops-admin
+sed "s#@RUNNER_DIR@#$DIR#" "$HERE/hooks/job-gate" > "/usr/local/lib/ops-admin/job-gate-$ALIAS.tmp"
+install -o root -g root -m 0755 "/usr/local/lib/ops-admin/job-gate-$ALIAS.tmp" "/usr/local/lib/ops-admin/job-gate-$ALIAS"
+rm -f "/usr/local/lib/ops-admin/job-gate-$ALIAS.tmp"
+printf '#!/bin/bash\nexec /usr/bin/python3 -I /usr/local/lib/ops-admin/job-gate-%s\n' "$ALIAS" > "/usr/local/lib/ops-admin/job-gate-$ALIAS.sh.tmp"
+install -o root -g root -m 0755 "/usr/local/lib/ops-admin/job-gate-$ALIAS.sh.tmp" "/usr/local/lib/ops-admin/job-gate-$ALIAS.sh"
+rm -f "/usr/local/lib/ops-admin/job-gate-$ALIAS.sh.tmp"
+grep -v '^ACTIONS_RUNNER_HOOK_JOB_STARTED=' "$DIR/.env" > "$DIR/.env.tmp" || true
+echo "ACTIONS_RUNNER_HOOK_JOB_STARTED=/usr/local/lib/ops-admin/job-gate-$ALIAS.sh" >> "$DIR/.env.tmp"
+mv "$DIR/.env.tmp" "$DIR/.env"
 chown -R root:root "$DIR"; chmod 0755 "$DIR"
 install -d -o "$U" -g "$U" -m 0750 "$DIR/_work" "$DIR/_diag"
 chown -R "$U:$U" "$DIR/_work" "$DIR/_diag"

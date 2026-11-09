@@ -23,6 +23,11 @@ in passwd, group and the process table and outside /etc/subuid and /etc/subgid, 
 UIDs (999 and nearby) or systemd DynamicUser (61184-65519). The installer denies cron and at, disables linger, and makes the user's
 home root-owned, so nothing a job starts can outlive the job.
 
+A root-owned job-started hook (`/usr/local/lib/ops-admin/job-gate-<alias>[.sh]`, set in the root-owned runner `.env`)
+fails every job before its first step unless it is `admin.yml` of `3gorka72/ops-admin`, dispatched manually on
+`main`. It reads the event payload the runner writes for the job, not workflow-controlled environment. So a workflow
+pushed on a branch never runs a step on the host and cannot leave a process behind for a later main job.
+
 Knowing this code grants nothing. A command runs only from the protected main branch of the private repo.
 
 ## Install (as root on the host)
