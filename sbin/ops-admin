@@ -133,21 +133,45 @@ def ancestors(table, pid):
     return chain
 
 
-def check_caller(host, caller, root="/proc", kill=True):
-    """The caller must run inside a Runner.Worker under Runner.Listener, and every process of the runner
-    user must belong to that Listener's tree (or be its ancestor). A process left behind by an earlier
-    job (e.g. a branch workflow) is killed and the call refused."""
+def unit_main_pid(host):
+    unit = "actions.runner.3gorka72-ops-admin.admin-%s.service" % host
+    out = subprocess.run(["/usr/bin/systemctl", "show", "-p", "MainPID", "--value", unit],
+                         capture_output=True, text=True, check=False).stdout.strip()
+    return int(out) if out.isdigit() else 0
+
+
+def exe_of(root, pid):
+    try:
+        return os.readlink(os.path.join(root, str(pid), "exe"))
+    except OSError:
+        return ""
+
+
+def check_caller(host, caller, root="/proc", kill=True, main_pid=None):
+    """The caller must run inside the real runner: a Runner.Worker whose exe is <DIR>/bin/Runner.Worker,
+    under a Runner.Listener whose exe is <DIR>/bin/Runner.Listener, which descends from the systemd unit's
+    MainPID (names can be faked with prctl; exe links and the unit's process tree cannot). Every process of
+    the runner user must belong to that Listener's tree or be its ancestor. Anything else (e.g. left by a
+    branch job) is killed and the call refused."""
     uid = pwd.getpwnam(host + "-admin").pw_uid
+    rdir = "/opt/admin-runner-%s/bin/" % host
+    if main_pid is None:
+        main_pid = unit_main_pid(host)
+    if main_pid <= 1:
+        die("runner unit has no MainPID")
     table = proc_table(root)
     chain = ancestors(table, caller)
     listener = None
     for p in chain:
         ppid = table[p][0]
-        if table[p][2] == "Runner.Worker" and ppid in table and table[ppid][2] == "Runner.Listener":
+        if (exe_of(root, p) == rdir + "Runner.Worker" and ppid in table
+                and exe_of(root, ppid) == rdir + "Runner.Listener"):
             listener = ppid
             break
     if listener is None:
         die("caller is not a runner job")
+    if main_pid not in ancestors(table, listener):
+        die("runner listener is not under the systemd unit")
     allowed = set(ancestors(table, listener))
     for pid in table:
         if listener in ancestors(table, pid):
@@ -171,8 +195,11 @@ def main():
     host = open(HOST_FILE).read().strip()
     if not re.fullmatch(r"[a-z][a-z0-9-]{1,30}", host):
         die("bad host file")
-    proc_root = os.environ.get("OPS_PROC", "/proc") if os.geteuid() != 0 else "/proc"
-    check_caller(host, os.getppid(), proc_root)
+    if os.geteuid() != 0 and "OPS_PROC" in os.environ:
+        check_caller(host, os.getppid(), os.environ["OPS_PROC"], kill=False,
+                     main_pid=int(os.environ.get("OPS_MAINPID", "0")))
+    else:
+        check_caller(host, os.getppid())
     data = sys.stdin.buffer.read(MAX_IN + 1)
     if len(data) > MAX_IN:
         die("input too large")
