@@ -20,7 +20,9 @@ echo "Сервер: $(hostname -f)   имя для установки: $ALIAS"
 echo "Если имя сервера выше не соответствует $ALIAS, ответьте n."
 if [ "${OPS_CONFIRM:-}" != y ]; then
   read -rp "Верно? Введите y и Enter: " ans </dev/tty
-  [ "$ans" = y ] || die "отменено"
+  ans=${ans//$'\r'/}; ans=${ans// /}
+  # Latin y/Y, Cyrillic у/У (same key look in a Russian layout), or да/Да.
+  case "$ans" in y|Y|у|У|да|Да|ДА) ;; *) die "отменено (ответ не y)";; esac
 fi
 U="${ALIAS}-admin"; DIR="/opt/admin-runner-${ALIAS}"; LABEL="admin-${ALIAS}"
 RV=2.338.2; RSHA=baebf204307bac6193480852732f0aba2ae97b6c5597c244f4d5558390147c40
@@ -86,6 +88,7 @@ else
   # Non-interactive installs (e.g. over ssh by the hands, without a tty) pass the token in RUNNER_TOKEN, read from stdin.
   TOKEN="${RUNNER_TOKEN:-}"; unset RUNNER_TOKEN
   if [ -z "$TOKEN" ]; then read -rsp "Вставьте токен GitHub (ops-admin) и нажмите Enter (символы не видны): " TOKEN </dev/tty; echo; fi
+  TOKEN=${TOKEN//$'\r'/}; TOKEN=${TOKEN// /}
   [ -n "$TOKEN" ] || die "пустой токен"
   install -d -o "$U" -g "$U" -m 0750 "$DIR"
   tgz="/tmp/actions-runner-$RV.tgz"
