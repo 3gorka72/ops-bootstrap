@@ -46,7 +46,9 @@ install -o root -g root -m 0440 "$tmp" "/etc/sudoers.d/ops-admin-$ALIAS"; rm -f 
 if [ -f "$DIR/.runner" ]; then
   echo "Сборщик $LABEL уже зарегистрирован"
 else
-  read -rsp "Вставьте токен GitHub (ops-admin) и нажмите Enter (символы не видны): " TOKEN </dev/tty; echo
+  # Non-interactive installs (e.g. over ssh by the hands) may pass the token in RUNNER_TOKEN, read from stdin.
+  TOKEN="${RUNNER_TOKEN:-}"; unset RUNNER_TOKEN
+  if [ -z "$TOKEN" ]; then read -rsp "Вставьте токен GitHub (ops-admin) и нажмите Enter (символы не видны): " TOKEN </dev/tty; echo; fi
   [ -n "$TOKEN" ] || die "пустой токен"
   install -d -o "$U" -g "$U" -m 0750 "$DIR"
   tgz="/tmp/actions-runner-$RV.tgz"
