@@ -194,14 +194,53 @@ def under(path, base):
     return path == base or path.startswith(base.rstrip("/") + "/")
 
 
-def runner_scoped(root, pid, unit_cg, uid):
-    """True if pid is in the runner unit's own cgroup (exact path or below it) or in user-<uid>.slice (a login
-    or user manager of the runner user). An unreadable cgroup counts as scoped, so the check fails closed."""
-    paths = cgroup_paths(root, pid)
-    if paths is None:
-        return True
+def runner_scoped(paths, unit_cg, uid):
+    """True if one of the cgroup paths is the runner unit's own cgroup (or below it) or user-<uid>.slice (a login
+    or user manager of the runner user)."""
     user_slice = "/user.slice/user-%d.slice" % uid
     return any(under(path, unit_cg) or under(path, user_slice) for path in paths)
+
+
+def uids_of(root, pid):
+    try:
+        with open(os.path.join(root, str(pid), "status")) as f:
+            m = re.search(r"^Uid:\s+(.*)$", f.read(), re.M)
+    except OSError:
+        return set()
+    return set(int(x) for x in m.group(1).split()) if m else set()
+
+
+def kill_if_still_foreign(root, pid, uid, unit_cg):
+    """SIGKILL pid only if, re-read now, it still has the runner uid and a readable runner-scoped cgroup.
+    A pidfd pins the process first, so a pid reused between the check and the signal is never hit.
+    Returns True if the signal was sent."""
+    fd = None
+    try:
+        if root == "/proc" and hasattr(os, "pidfd_open"):
+            try:
+                fd = os.pidfd_open(pid)
+            except OSError:
+                return False
+        paths = cgroup_paths(root, pid)
+        if uid not in uids_of(root, pid) or paths is None or not runner_scoped(paths, unit_cg, uid):
+            return False
+        try:
+            if fd is not None:
+                signal.pidfd_send_signal(fd, signal.SIGKILL)
+            else:
+                os.kill(pid, signal.SIGKILL)
+        except OSError:
+            return False
+        return True
+    finally:
+        if fd is not None:
+            os.close(fd)
+
+
+def note(msg):
+    with open(LOG, "a") as lf:
+        lf.write(time.strftime("%Y-%m-%dT%H:%M:%SZ ", time.gmtime()) + msg + "\n")
+    subprocess.run(["/usr/bin/logger", "-t", "ops-admin", msg], check=False)
 
 
 def check_caller(host, caller, root="/proc", kill=True, main_pid=None, unit_cg=None):
@@ -240,25 +279,26 @@ def check_caller(host, caller, root="/proc", kill=True, main_pid=None, unit_cg=N
     if not unit_cg.startswith("/") or unit_cg == "/":
         die("runner unit has no ControlGroup")
     same_uid = [p for p, (_, uids, _) in table.items() if uid in uids and p not in allowed]
-    foreign = [p for p in same_uid if runner_scoped(root, p, unit_cg, uid)]
+    foreign, unreadable = [], []
     for p in same_uid:
-        if p not in foreign:
-            msg = "AMBER uid-shared pid=%d comm=%s cgroup=%s host=%s" % (p, table[p][2], cgroup_of(root, p), host)
-            with open(LOG, "a") as lf:
-                lf.write(time.strftime("%Y-%m-%dT%H:%M:%SZ ", time.gmtime()) + msg + "\n")
-            subprocess.run(["/usr/bin/logger", "-t", "ops-admin", msg], check=False)
+        paths = cgroup_paths(root, p)
+        if paths is None:
+            unreadable.append(p)
+        elif runner_scoped(paths, unit_cg, uid):
+            foreign.append(p)
+        else:
+            note("AMBER uid-shared pid=%d comm=%s cgroup=%s host=%s" % (p, table[p][2], cgroup_of(root, p), host))
+    for p in unreadable:
+        # Usually the process exited between the two reads and the pid may already be reused: never kill on doubt.
+        note("RED cgroup-unreadable pid=%d comm=%s host=%s (not killed)" % (p, table[p][2], host))
+    for p in foreign:
+        killed = kill and kill_if_still_foreign(root, p, uid, unit_cg)
+        note("RED foreign-process pid=%d comm=%s host=%s%s" % (p, table[p][2], host,
+                                                              "" if killed else " (not killed)"))
     if foreign:
-        for p in foreign:
-            msg = "RED foreign-process pid=%d comm=%s host=%s" % (p, table[p][2], host)
-            with open(LOG, "a") as lf:
-                lf.write(time.strftime("%Y-%m-%dT%H:%M:%SZ ", time.gmtime()) + msg + "\n")
-            subprocess.run(["/usr/bin/logger", "-t", "ops-admin", msg], check=False)
-            if kill:
-                try:
-                    os.kill(p, signal.SIGKILL)
-                except OSError:
-                    pass
         die("foreign process of %s-admin outside the runner tree" % host)
+    if unreadable:
+        die("cgroup of a %s-admin process unreadable" % host)
 
 
 def main():

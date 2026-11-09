@@ -43,14 +43,28 @@ r = [
  run("container same uid (limes mysqld)", {200: (1, U, "mysqld", None, "/system.slice/docker-abc.scope")}, True, [], ["AMBER uid-shared pid=200 comm=mysqld cgroup=/system.slice/docker-abc.scope"]),
  run("leftover in unit cgroup", {300: (1, U, "sleep", None, "/system.slice/" + UNIT)}, False, [300], ["RED foreign-process pid=300"]),
  run("user manager of runner uid", {400: (1, U, "systemd", None, "/user.slice/user-%d.slice/user@%d.service/init.scope" % (U, U))}, False, [400], ["RED foreign-process pid=400"]),
- run("unreadable cgroup fails closed", {500: (1, U, "x", None, None)}, False, [500], ["RED foreign-process pid=500"]),
+ run("unreadable cgroup: refused, not killed", {500: (1, U, "x", None, None)}, False, [], ["RED cgroup-unreadable pid=500"]),
  run("v1 hybrid lines", {600: (1, U, "y", None, "/system.slice/docker-def.scope")}, True, [], ["AMBER uid-shared pid=600"]),
  run("unit name as component elsewhere", {800: (1, U, "z", None, "/other.slice/" + UNIT)}, True, [], ["AMBER uid-shared pid=800"]),
  run("sibling prefix not under unit", {900: (1, U, "w", None, "/system.slice/" + UNIT + "-evil")}, True, [], ["AMBER uid-shared pid=900"]),
  run("child cgroup of unit", {910: (1, U, "v", None, "/system.slice/" + UNIT + "/sub")}, False, [910], ["RED foreign-process pid=910"]),
- run("empty cgroup file fails closed", {920: (1, U, "e", None, "")}, False, [920], ["RED foreign-process pid=920"]),
+ run("empty cgroup file: refused, not killed", {920: (1, U, "e", None, "")}, False, [], ["RED cgroup-unreadable pid=920"]),
  run("other uid in unit cgroup ignored", {700: (1, 0, "root-thing", None, "/system.slice/" + UNIT)}, True, [], []),
 ]
+# pid reuse: the leftover is foreign at scan time, then (before the kill) the pid now belongs to a container
+orig = m.kill_if_still_foreign
+def reuse(root, pid, uid, unit_cg):
+    open(os.path.join(root, str(pid), "cgroup"), "w").write("0::/system.slice/docker-new.scope\n")
+    return orig(root, pid, uid, unit_cg)
+m.kill_if_still_foreign = reuse
+r.append(run("pid reused before kill: refused, not killed", {930: (1, U, "sleep", None, "/system.slice/" + UNIT)}, False, [], ["RED foreign-process pid=930 comm=sleep host=limes (not killed)"]))
+def reuse_uid(root, pid, uid, unit_cg):
+    st = os.path.join(root, str(pid), "status")
+    open(st, "w").write(open(st).read().replace("Uid:\t%d\t%d\t%d\t%d" % (U, U, U, U), "Uid:\t0\t0\t0\t0"))
+    return orig(root, pid, uid, unit_cg)
+m.kill_if_still_foreign = reuse_uid
+r.append(run("uid changed before kill: refused, not killed", {940: (1, U, "sleep", None, "/system.slice/" + UNIT)}, False, [], ["(not killed)"]))
+m.kill_if_still_foreign = orig
 killed.clear(); m.LOG = tempfile.mktemp()
 try:
     m.check_caller(HOST, 104, root=build({}), kill=True, main_pid=100, unit_cg=""); nocg = False

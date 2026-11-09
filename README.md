@@ -14,8 +14,10 @@ Installer for the `admin-<alias>` GitHub runner used by the private `3gorka72/op
 
 The wrapper also checks its caller. The call must come from a `Runner.Worker` under `Runner.Listener`, and every process
 of `<alias>-admin` in the runner unit's cgroup or in `user-<uid>.slice` must belong to that runner tree. Anything left
-behind by an earlier job (a job cannot leave the unit cgroup without root) is killed, logged as `RED foreign-process`,
-and the call is refused. A process that only shares the numeric UID but runs in another cgroup, such as a container's
+behind by an earlier job (a job cannot leave the unit cgroup without root) is logged as `RED foreign-process`, the call
+is refused, and the process is killed only if a re-read through a pidfd still shows the runner uid and the runner
+cgroup. A process whose cgroup cannot be read is logged as `RED cgroup-unreadable` and refuses the call, but is
+never killed. A process that only shares the numeric UID but runs in another cgroup, such as a container's
 mysqld or postgres, is logged as `AMBER uid-shared` and left alone. New users get a UID from 59000-59999 that is free
 in passwd, group and the process table and outside /etc/subuid and /etc/subgid, so they do not collide with container
 UIDs (999 and nearby) or systemd DynamicUser (61184-65519). The installer denies cron and at, disables linger, and makes the user's

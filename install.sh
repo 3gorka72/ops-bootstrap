@@ -101,6 +101,8 @@ else
 fi
 # Lock the runner dir: root owns everything, the runner user writes only _work and _diag.
 for f in .env .path .runner .credentials; do [ -e "$DIR/$f" ] || die "нет $DIR/$f после регистрации"; done
+# The wrapper finds the runner by this exact unit name (MainPID, ControlGroup); refuse anything else.
+[ "$(cat "$DIR/.service" 2>/dev/null)" = "$UNIT" ] || die "служба сборщика называется не $UNIT; ничего не запускаю"
 chown -R root:root "$DIR"; chmod 0755 "$DIR"
 install -d -o "$U" -g "$U" -m 0750 "$DIR/_work" "$DIR/_diag"
 chown -R "$U:$U" "$DIR/_work" "$DIR/_diag"
