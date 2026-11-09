@@ -16,6 +16,7 @@ import os
 import pwd
 import re
 import signal
+import socket
 import subprocess
 import sys
 import time
@@ -223,8 +224,8 @@ def main():
     if not cmd.strip():
         die("empty command")
     spend_jti(claims["jti"], claims["exp"], now)
-    line = "%s host=%s run=%s/%s actor=%s cmd_sha256=%s bytes=%d\n" % (
-        time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now)), host, claims.get("run_id"),
+    line = "%s host=%s hostname=%s run=%s/%s actor=%s cmd_sha256=%s bytes=%d\n" % (
+        time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now)), host, socket.getfqdn(), claims.get("run_id"),
         claims.get("run_attempt"), claims.get("actor"), hashlib.sha256(cmd).hexdigest(), len(cmd))
     with open(LOG, "a") as lf:
         lf.write(line)

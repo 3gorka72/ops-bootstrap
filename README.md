@@ -2,7 +2,7 @@
 
 Installer for the `admin-<alias>` GitHub runner used by the private `3gorka72/ops-admin` repo.
 
-- `install.sh <alias>`: creates the user `<alias>-admin` (nologin, no docker). Installs `/usr/local/sbin/ops-admin` with a
+- `install.sh <alias>`: shows the alias and the host FQDN and asks for `y` (or OPS_CONFIRM=y), then creates the user `<alias>-admin` (nologin, no docker). Installs `/usr/local/sbin/ops-admin` with a
   sudoers drop-in that allows only that path. Registers a runner (label `admin-<alias>`, `--disableupdate`). The runner
   directory is root-owned, except `_work/` and `_diag/`.
 - `sbin/ops-admin`: runs a command as root **only** after verifying the job's GitHub Actions OIDC token. The token must

@@ -13,6 +13,15 @@ command -v python3 >/dev/null || die "нет python3"
 command -v curl >/dev/null || die "нет curl"
 command -v visudo >/dev/null || die "нет sudo/visudo"
 HERE=$(cd "$(dirname "$0")" && pwd)
+
+# Guard against installing under the wrong alias (2026-11-09: alias "hub" was run on another host).
+# The operator confirms alias and FQDN; without --replace a duplicate runner name fails instead of taking it over.
+echo "Сервер: $(hostname -f)   имя для установки: $ALIAS"
+echo "Если имя сервера выше не соответствует $ALIAS, ответьте n."
+if [ "${OPS_CONFIRM:-}" != y ]; then
+  read -rp "Верно? Введите y и Enter: " ans </dev/tty
+  [ "$ans" = y ] || die "отменено"
+fi
 U="${ALIAS}-admin"; DIR="/opt/admin-runner-${ALIAS}"; LABEL="admin-${ALIAS}"
 RV=2.338.2; RSHA=baebf204307bac6193480852732f0aba2ae97b6c5597c244f4d5558390147c40
 UNIT="actions.runner.3gorka72-ops-admin.${LABEL}.service"
@@ -56,7 +65,7 @@ else
   echo "$RSHA  $tgz" | sha256sum -c - >/dev/null || die "контрольная сумма сборщика не сошлась"
   tar -xzf "$tgz" -C "$DIR"; rm -f "$tgz"; chown -R "$U:$U" "$DIR"
   (cd "$DIR" && sudo -u "$U" -H ./config.sh --unattended --url https://github.com/3gorka72/ops-admin \
-    --token "$TOKEN" --name "$LABEL" --labels "$LABEL" --no-default-labels --disableupdate --replace >/dev/null)
+    --token "$TOKEN" --name "$LABEL" --labels "$LABEL" --no-default-labels --disableupdate >/dev/null)
   unset TOKEN
   (cd "$DIR" && ./svc.sh install "$U" >/dev/null)
 fi
