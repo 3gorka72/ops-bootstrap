@@ -33,17 +33,24 @@ if id "$U" >/dev/null 2>&1; then
   [ "$(cat /etc/ops-admin/host 2>/dev/null)" = "$ALIAS" ] || die "пользователь $U уже есть, но не от этой установки; ничего не трогаю"
 else
   [ ! -e "/var/lib/$U" ] || die "/var/lib/$U уже существует; ничего не трогаю"
-  # Explicit UID in 61000-61999, free in passwd/group and in the process table: --system would take 999-990,
-  # the UIDs that container images (mysql, postgres, redis) run as, and a shared UID makes them look like
-  # runner processes (limes, 2026-11-09).
+  # Explicit UID in 59000-59999 (top of the normal range, below systemd's DynamicUser 61184-65519), free in
+  # passwd/group, in the process table and outside every /etc/subuid and /etc/subgid range. --system would take
+  # 999-990, the UIDs container images (mysql, postgres, redis) run as; a shared UID made a container's mysqld
+  # look like a runner process (limes, 2026-11-09).
   NUID=""; USED=$(ps -eo uid= | tr -d ' ' | sort -u)
-  for n in $(seq 61000 61999); do
+  SUBF=""; for f in /etc/subuid /etc/subgid; do [ -r "$f" ] && SUBF="$SUBF $f"; done
+  # in_sub N: true if N is inside a subordinate range; an awk error counts as inside (fail closed).
+  in_sub() { [ -n "$SUBF" ] || return 1; local rc=0
+    awk -F: -v n="$1" '$2 ~ /^[0-9]+$/ && $3 ~ /^[0-9]+$/ && n >= $2 && n < $2 + $3 {f=1} END {exit !f}' $SUBF || rc=$?
+    [ "$rc" -ne 1 ]; }
+  for n in $(seq 59000 59999); do
     getent passwd "$n" >/dev/null && continue
     getent group "$n" >/dev/null && continue
     grep -qx "$n" <<<"$USED" && continue
+    in_sub "$n" && continue
     NUID=$n; break
   done
-  [ -n "$NUID" ] || die "нет свободного UID в 61000-61999"
+  [ -n "$NUID" ] || die "нет свободного UID в 59000-59999"
   groupadd --gid "$NUID" "$U"
   useradd --system --uid "$NUID" --gid "$NUID" --create-home --home-dir "/var/lib/$U" --shell /usr/sbin/nologin "$U"; CREATED=1
 fi

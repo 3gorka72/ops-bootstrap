@@ -16,8 +16,9 @@ The wrapper also checks its caller. The call must come from a `Runner.Worker` un
 of `<alias>-admin` in the runner unit's cgroup or in `user-<uid>.slice` must belong to that runner tree. Anything left
 behind by an earlier job (a job cannot leave the unit cgroup without root) is killed, logged as `RED foreign-process`,
 and the call is refused. A process that only shares the numeric UID but runs in another cgroup, such as a container's
-mysqld or postgres, is logged as `AMBER uid-shared` and left alone. New users get a UID from 61000-61999 that is free
-in passwd and in the process table, so they do not collide with container UIDs (999 and nearby). The installer denies cron and at, disables linger, and makes the user's
+mysqld or postgres, is logged as `AMBER uid-shared` and left alone. New users get a UID from 59000-59999 that is free
+in passwd, group and the process table and outside /etc/subuid and /etc/subgid, so they do not collide with container
+UIDs (999 and nearby) or systemd DynamicUser (61184-65519). The installer denies cron and at, disables linger, and makes the user's
 home root-owned, so nothing a job starts can outlive the job.
 
 Knowing this code grants nothing. A command runs only from the protected main branch of the private repo.

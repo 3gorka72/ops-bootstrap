@@ -166,30 +166,45 @@ def host_identity(mid_file="/etc/machine-id"):
     return name, mid
 
 
-def cgroup_of(root, pid):
-    """The process's cgroup path(s) from /proc/<pid>/cgroup (v2 line, or all v1 paths joined by ',')."""
+def cgroup_paths(root, pid):
+    """Cgroup paths from /proc/<pid>/cgroup (the v2 line, or every v1 hierarchy), or None if unreadable/empty."""
     try:
         with open(os.path.join(root, str(pid), "cgroup")) as f:
             paths = sorted(set(line.rstrip("\n").split(":", 2)[-1] for line in f if line.strip()))
     except OSError:
+        return None
+    return paths or None
+
+
+def cgroup_of(root, pid):
+    """Cgroup paths for the log line, sanitised."""
+    paths = cgroup_paths(root, pid)
+    if paths is None:
         return "?"
-    return re.sub(r"[^A-Za-z0-9@._:/,=-]", "?", ",".join(paths))[:300] or "?"
+    return re.sub(r"[^A-Za-z0-9@._:/,=-]", "?", ",".join(paths))[:300]
 
 
-def runner_scoped(root, pid, unit, uid):
-    """True if pid is in the runner unit's cgroup or in user-<uid>.slice (a login/user manager of the runner
-    user). Unreadable cgroup counts as scoped, so the check fails closed."""
-    cg = cgroup_of(root, pid)
-    if cg == "?":
+def unit_cgroup(host):
+    unit = "actions.runner.3gorka72-ops-admin.admin-%s.service" % host
+    return subprocess.run(["/usr/bin/systemctl", "show", "-p", "ControlGroup", "--value", unit],
+                          capture_output=True, text=True, check=False).stdout.strip()
+
+
+def under(path, base):
+    return path == base or path.startswith(base.rstrip("/") + "/")
+
+
+def runner_scoped(root, pid, unit_cg, uid):
+    """True if pid is in the runner unit's own cgroup (exact path or below it) or in user-<uid>.slice (a login
+    or user manager of the runner user). An unreadable cgroup counts as scoped, so the check fails closed."""
+    paths = cgroup_paths(root, pid)
+    if paths is None:
         return True
-    for path in cg.split(","):
-        parts = path.split("/")
-        if unit in parts or "user-%d.slice" % uid in parts:
-            return True
-    return False
+    user_slice = "/user.slice/user-%d.slice" % uid
+    return any(under(path, unit_cg) or under(path, user_slice) for path in paths)
 
 
-def check_caller(host, caller, root="/proc", kill=True, main_pid=None):
+def check_caller(host, caller, root="/proc", kill=True, main_pid=None, unit_cg=None):
     """The caller must run inside the real runner: a Runner.Worker whose exe is <DIR>/bin/Runner.Worker,
     under a Runner.Listener whose exe is <DIR>/bin/Runner.Listener, which descends from the systemd unit's
     MainPID (names can be faked with prctl; exe links and the unit's process tree cannot). Every process of
@@ -220,9 +235,12 @@ def check_caller(host, caller, root="/proc", kill=True, main_pid=None):
     for pid in table:
         if listener in ancestors(table, pid):
             allowed.add(pid)
-    unit = "actions.runner.3gorka72-ops-admin.admin-%s.service" % host
+    if unit_cg is None:
+        unit_cg = unit_cgroup(host)
+    if not unit_cg.startswith("/") or unit_cg == "/":
+        die("runner unit has no ControlGroup")
     same_uid = [p for p, (_, uids, _) in table.items() if uid in uids and p not in allowed]
-    foreign = [p for p in same_uid if runner_scoped(root, p, unit, uid)]
+    foreign = [p for p in same_uid if runner_scoped(root, p, unit_cg, uid)]
     for p in same_uid:
         if p not in foreign:
             msg = "AMBER uid-shared pid=%d comm=%s cgroup=%s host=%s" % (p, table[p][2], cgroup_of(root, p), host)
@@ -249,7 +267,7 @@ def main():
         die("bad host file")
     if os.geteuid() != 0 and "OPS_PROC" in os.environ:
         check_caller(host, os.getppid(), os.environ["OPS_PROC"], kill=False,
-                     main_pid=int(os.environ.get("OPS_MAINPID", "0")))
+                     main_pid=int(os.environ.get("OPS_MAINPID", "0")), unit_cg=os.environ.get("OPS_UNITCG", ""))
     else:
         check_caller(host, os.getppid())
     data = sys.stdin.buffer.read(MAX_IN + 1)
