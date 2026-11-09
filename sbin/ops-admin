@@ -13,7 +13,9 @@ import hashlib
 import hmac
 import json
 import os
+import pwd
 import re
+import signal
 import subprocess
 import sys
 import time
@@ -106,10 +108,72 @@ def spend_jti(jti, exp, now, state=STATE):
         f.write("\n".join(keep) + "\n")
 
 
+def proc_table(root):
+    """pid -> (ppid, set of uids from Uid:, comm) for every readable /proc/<pid>."""
+    table = {}
+    for name in os.listdir(root):
+        if not name.isdigit():
+            continue
+        try:
+            with open(os.path.join(root, name, "status")) as f:
+                st = f.read()
+            comm = open(os.path.join(root, name, "comm")).read().strip()
+        except OSError:
+            continue
+        ppid = int(re.search(r"^PPid:\s+(\d+)", st, re.M).group(1))
+        uids = set(int(x) for x in re.search(r"^Uid:\s+(.*)$", st, re.M).group(1).split())
+        table[int(name)] = (ppid, uids, comm)
+    return table
+
+
+def ancestors(table, pid):
+    chain = []
+    while pid in table and pid not in chain and pid > 1:
+        chain.append(pid)
+        pid = table[pid][0]
+    return chain
+
+
+def check_caller(host, caller, root="/proc", kill=True):
+    """The caller must run inside a Runner.Worker under Runner.Listener, and every process of the runner
+    user must belong to that Listener's tree (or be its ancestor). A process left behind by an earlier
+    job (e.g. a branch workflow) is killed and the call refused."""
+    uid = pwd.getpwnam(host + "-admin").pw_uid
+    table = proc_table(root)
+    chain = ancestors(table, caller)
+    listener = None
+    for p in chain:
+        ppid = table[p][0]
+        if table[p][2] == "Runner.Worker" and ppid in table and table[ppid][2] == "Runner.Listener":
+            listener = ppid
+            break
+    if listener is None:
+        die("caller is not a runner job")
+    allowed = set(ancestors(table, listener))
+    for pid in table:
+        if listener in ancestors(table, pid):
+            allowed.add(pid)
+    foreign = [p for p, (_, uids, _) in table.items() if uid in uids and p not in allowed]
+    if foreign:
+        for p in foreign:
+            msg = "RED foreign-process pid=%d comm=%s host=%s" % (p, table[p][2], host)
+            with open(LOG, "a") as lf:
+                lf.write(time.strftime("%Y-%m-%dT%H:%M:%SZ ", time.gmtime()) + msg + "\n")
+            subprocess.run(["/usr/bin/logger", "-t", "ops-admin", msg], check=False)
+            if kill:
+                try:
+                    os.kill(p, signal.SIGKILL)
+                except OSError:
+                    pass
+        die("foreign process of %s-admin outside the runner tree" % host)
+
+
 def main():
     host = open(HOST_FILE).read().strip()
     if not re.fullmatch(r"[a-z][a-z0-9-]{1,30}", host):
         die("bad host file")
+    proc_root = os.environ.get("OPS_PROC", "/proc") if os.geteuid() != 0 else "/proc"
+    check_caller(host, os.getppid(), proc_root)
     data = sys.stdin.buffer.read(MAX_IN + 1)
     if len(data) > MAX_IN:
         die("input too large")

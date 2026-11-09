@@ -20,6 +20,12 @@ UNIT="actions.runner.3gorka72-ops-admin.${LABEL}.service"
 # 1. user
 id "$U" >/dev/null 2>&1 || useradd --system --create-home --home-dir "/var/lib/$U" --shell /usr/sbin/nologin "$U"
 if id -nG "$U" | tr ' ' '\n' | grep -qx docker; then die "$U в группе docker"; fi
+# Nothing the runner user starts may outlive a job: no cron, no at, no linger, no writable home.
+for f in /etc/cron.deny /etc/at.deny; do touch "$f"; grep -qx "$U" "$f" || echo "$U" >> "$f"; done
+if [ -f /etc/cron.allow ]; then sed -i "/^${U}\$/d" /etc/cron.allow; fi
+if [ -f /etc/at.allow ]; then sed -i "/^${U}\$/d" /etc/at.allow; fi
+command -v loginctl >/dev/null && loginctl disable-linger "$U" 2>/dev/null || true
+find "/var/lib/$U" -mindepth 1 -delete; chown root:root "/var/lib/$U"; chmod 0755 "/var/lib/$U"
 
 # 2. wrapper, host file, state, log, sudoers (exact path, no args)
 install -o root -g root -m 0755 "$HERE/sbin/ops-admin" /usr/local/sbin/ops-admin
