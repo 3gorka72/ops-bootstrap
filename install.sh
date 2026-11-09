@@ -33,7 +33,19 @@ if id "$U" >/dev/null 2>&1; then
   [ "$(cat /etc/ops-admin/host 2>/dev/null)" = "$ALIAS" ] || die "пользователь $U уже есть, но не от этой установки; ничего не трогаю"
 else
   [ ! -e "/var/lib/$U" ] || die "/var/lib/$U уже существует; ничего не трогаю"
-  useradd --system --create-home --home-dir "/var/lib/$U" --shell /usr/sbin/nologin "$U"; CREATED=1
+  # Explicit UID in 61000-61999, free in passwd/group and in the process table: --system would take 999-990,
+  # the UIDs that container images (mysql, postgres, redis) run as, and a shared UID makes them look like
+  # runner processes (limes, 2026-11-09).
+  NUID=""; USED=$(ps -eo uid= | tr -d ' ' | sort -u)
+  for n in $(seq 61000 61999); do
+    getent passwd "$n" >/dev/null && continue
+    getent group "$n" >/dev/null && continue
+    grep -qx "$n" <<<"$USED" && continue
+    NUID=$n; break
+  done
+  [ -n "$NUID" ] || die "нет свободного UID в 61000-61999"
+  groupadd --gid "$NUID" "$U"
+  useradd --system --uid "$NUID" --gid "$NUID" --create-home --home-dir "/var/lib/$U" --shell /usr/sbin/nologin "$U"; CREATED=1
 fi
 if id -nG "$U" | tr ' ' '\n' | grep -qx docker; then die "$U в группе docker"; fi
 # Nothing the runner user starts may outlive a job: no cron, no at, no linger, no writable home.

@@ -13,8 +13,11 @@ Installer for the `admin-<alias>` GitHub runner used by the private `3gorka72/op
   `/etc/machine-id` (`mid=`), so a wrong alias on a host shows up in the log.
 
 The wrapper also checks its caller. The call must come from a `Runner.Worker` under `Runner.Listener`, and every process
-of `<alias>-admin` must belong to that runner tree. Anything left behind by an earlier job is killed, logged as
-`RED foreign-process`, and the call is refused. The installer denies cron and at, disables linger, and makes the user's
+of `<alias>-admin` in the runner unit's cgroup or in `user-<uid>.slice` must belong to that runner tree. Anything left
+behind by an earlier job (a job cannot leave the unit cgroup without root) is killed, logged as `RED foreign-process`,
+and the call is refused. A process that only shares the numeric UID but runs in another cgroup, such as a container's
+mysqld or postgres, is logged as `AMBER uid-shared` and left alone. New users get a UID from 61000-61999 that is free
+in passwd and in the process table, so they do not collide with container UIDs (999 and nearby). The installer denies cron and at, disables linger, and makes the user's
 home root-owned, so nothing a job starts can outlive the job.
 
 Knowing this code grants nothing. A command runs only from the protected main branch of the private repo.
