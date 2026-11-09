@@ -9,7 +9,8 @@ Installer for the `admin-<alias>` GitHub runner used by the private `3gorka72/op
   be signed by GitHub and carry these claims: repository `3gorka72/ops-admin`, workflow
   `admin.yml@refs/heads/main`, event `workflow_dispatch`, a self-hosted runner, audience `admin-<alias>`, fresh, not
   replayed. Every accepted command is logged to `/var/log/ops-admin.log` and journald (`ops-admin` tag) with its
-  sha256, run id and actor.
+  sha256, run id and actor, the host's canonical FQDN (`hostname=`, as `hostname -f`) and a 12-hex hash of
+  `/etc/machine-id` (`mid=`), so a wrong alias on a host shows up in the log.
 
 The wrapper also checks its caller. The call must come from a `Runner.Worker` under `Runner.Listener`, and every process
 of `<alias>-admin` must belong to that runner tree. Anything left behind by an earlier job is killed, logged as

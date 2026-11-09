@@ -148,6 +148,24 @@ def exe_of(root, pid):
         return ""
 
 
+def host_identity(mid_file="/etc/machine-id"):
+    """(name, mid) for the log line. name is the canonical FQDN, as `hostname -f` prints it; socket.getfqdn()
+    returns ubuntu-24.localhost on most of the fleet. mid is a short hash of the machine id, which stays unique
+    even where FQDNs repeat or are wrong, so a mis-installed alias shows up in the log."""
+    name = socket.gethostname()
+    try:
+        name = socket.getaddrinfo(name, None, flags=socket.AI_CANONNAME)[0][3] or name
+    except OSError:
+        pass
+    name = re.sub(r"[^A-Za-z0-9.-]", "?", name)[:253] or "?"
+    try:
+        with open(mid_file, "rb") as f:
+            mid = hashlib.sha256(f.read().strip()).hexdigest()[:12]
+    except OSError:
+        mid = "none"
+    return name, mid
+
+
 def check_caller(host, caller, root="/proc", kill=True, main_pid=None):
     """The caller must run inside the real runner: a Runner.Worker whose exe is <DIR>/bin/Runner.Worker,
     under a Runner.Listener whose exe is <DIR>/bin/Runner.Listener, which descends from the systemd unit's
@@ -224,8 +242,9 @@ def main():
     if not cmd.strip():
         die("empty command")
     spend_jti(claims["jti"], claims["exp"], now)
-    line = "%s host=%s hostname=%s run=%s/%s actor=%s cmd_sha256=%s bytes=%d\n" % (
-        time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now)), host, socket.getfqdn(), claims.get("run_id"),
+    fqdn, mid = host_identity()
+    line = "%s host=%s hostname=%s mid=%s run=%s/%s actor=%s cmd_sha256=%s bytes=%d\n" % (
+        time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now)), host, fqdn, mid, claims.get("run_id"),
         claims.get("run_attempt"), claims.get("actor"), hashlib.sha256(cmd).hexdigest(), len(cmd))
     with open(LOG, "a") as lf:
         lf.write(line)
