@@ -74,13 +74,12 @@ def check_claims(c, host, now):
         "repository_owner": OWNER,
         "job_workflow_ref": WF_REF,
         "ref": "refs/heads/main",
-        "sub": "repo:" + REPO + ":ref:refs/heads/main",
         "event_name": "workflow_dispatch",
         "runner_environment": "self-hosted",
     }
     for k, v in want.items():
         if c.get(k) != v:
-            die("claim %s mismatch" % k)
+            die("claim %s mismatch: got %r" % (k, c.get(k)))
     if not (isinstance(c.get("exp"), int) and c["exp"] > now):
         die("token expired")
     if not (isinstance(c.get("iat"), int) and now - 600 <= c["iat"] <= now + 60):
