@@ -1,0 +1,149 @@
+#!/usr/bin/python3 -I
+"""ops-admin: run one command as root, only for a GitHub Actions OIDC token minted by
+3gorka72/ops-admin .github/workflows/admin.yml on refs/heads/main via workflow_dispatch,
+with audience admin-<host> (host read from root-owned /etc/ops-admin/host).
+
+stdin: line 1 = the OIDC JWT, rest = the command (run with bash -s as root).
+Stdlib only: RS256 is verified with PKCS#1 v1.5 math against GitHub's JWKS.
+Owner grant: router chat 2026-11-09 ~15:20Z (admin rights on servers, Perplexity backup only).
+"""
+import base64
+import fcntl
+import hashlib
+import hmac
+import json
+import os
+import re
+import subprocess
+import sys
+import time
+import urllib.request
+
+ISS = "https://token.actions.githubusercontent.com"
+JWKS_URL = ISS + "/.well-known/jwks"
+OWNER = "3gorka72"
+REPO = OWNER + "/ops-admin"
+WF_REF = REPO + "/.github/workflows/admin.yml@refs/heads/main"
+HOST_FILE = "/etc/ops-admin/host"
+STATE = "/var/lib/ops-admin/jti"
+LOG = "/var/log/ops-admin.log"
+DER_SHA256 = bytes.fromhex("3031300d060960864801650304020105000420")
+MAX_IN = 1 << 20
+
+
+def die(msg):
+    print("ops-admin: refused: " + msg, file=sys.stderr)
+    sys.exit(97)
+
+
+def b64u(s):
+    return base64.urlsafe_b64decode(s + "=" * (-len(s) % 4))
+
+
+def rs256_ok(signing_input, sig, n, e):
+    k = (n.bit_length() + 7) // 8
+    if len(sig) != k:
+        return False
+    m = pow(int.from_bytes(sig, "big"), e, n).to_bytes(k, "big")
+    t = DER_SHA256 + hashlib.sha256(signing_input).digest()
+    if k < len(t) + 11:
+        return False
+    want = b"\x00\x01" + b"\xff" * (k - len(t) - 3) + b"\x00" + t
+    return hmac.compare_digest(m, want)
+
+
+def jwks(kid, url=JWKS_URL):
+    req = urllib.request.Request(url, headers={"User-Agent": "ops-admin"})
+    with urllib.request.urlopen(req, timeout=20) as r:
+        keys = json.load(r).get("keys", [])
+    for key in keys:
+        if key.get("kid") == kid and key.get("kty") == "RSA":
+            return int.from_bytes(b64u(key["n"]), "big"), int.from_bytes(b64u(key["e"]), "big")
+    die("unknown signing key")
+
+
+def check_claims(c, host, now):
+    aud = c.get("aud")
+    if aud != "admin-" + host and aud != ["admin-" + host]:
+        die("audience mismatch")
+    want = {
+        "iss": ISS,
+        "repository": REPO,
+        "repository_owner": OWNER,
+        "job_workflow_ref": WF_REF,
+        "ref": "refs/heads/main",
+        "sub": "repo:" + REPO + ":ref:refs/heads/main",
+        "event_name": "workflow_dispatch",
+        "runner_environment": "self-hosted",
+    }
+    for k, v in want.items():
+        if c.get(k) != v:
+            die("claim %s mismatch" % k)
+    if not (isinstance(c.get("exp"), int) and c["exp"] > now):
+        die("token expired")
+    if not (isinstance(c.get("iat"), int) and now - 600 <= c["iat"] <= now + 60):
+        die("token not fresh")
+    if isinstance(c.get("nbf"), int) and c["nbf"] > now + 60:
+        die("token not yet valid")
+    if not isinstance(c.get("jti"), str) or not c["jti"]:
+        die("no jti")
+
+
+def spend_jti(jti, exp, now, state=STATE):
+    fd = os.open(state, os.O_RDWR | os.O_CREAT, 0o600)
+    with os.fdopen(fd, "r+") as f:
+        fcntl.flock(f, fcntl.LOCK_EX)
+        keep = []
+        for line in f.read().splitlines():
+            parts = line.split(" ", 1)
+            if len(parts) == 2 and parts[0].isdigit() and int(parts[0]) > now:
+                if parts[1] == jti:
+                    die("token replayed")
+                keep.append(line)
+        keep.append("%d %s" % (exp, jti))
+        f.seek(0)
+        f.truncate()
+        f.write("\n".join(keep) + "\n")
+
+
+def main():
+    host = open(HOST_FILE).read().strip()
+    if not re.fullmatch(r"[a-z][a-z0-9-]{1,30}", host):
+        die("bad host file")
+    data = sys.stdin.buffer.read(MAX_IN + 1)
+    if len(data) > MAX_IN:
+        die("input too large")
+    tok, _, cmd = data.partition(b"\n")
+    parts = tok.strip().decode("ascii", "replace").split(".")
+    if len(parts) != 3:
+        die("malformed token")
+    try:
+        hdr = json.loads(b64u(parts[0]))
+        claims = json.loads(b64u(parts[1]))
+        sig = b64u(parts[2])
+    except Exception:
+        die("undecodable token")
+    if hdr.get("alg") != "RS256" or not hdr.get("kid"):
+        die("bad header")
+    n, e = jwks(hdr["kid"])
+    if not rs256_ok((parts[0] + "." + parts[1]).encode(), sig, n, e):
+        die("bad signature")
+    now = int(time.time())
+    check_claims(claims, host, now)
+    if not cmd.strip():
+        die("empty command")
+    spend_jti(claims["jti"], claims["exp"], now)
+    line = "%s host=%s run=%s/%s actor=%s cmd_sha256=%s bytes=%d\n" % (
+        time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now)), host, claims.get("run_id"),
+        claims.get("run_attempt"), claims.get("actor"), hashlib.sha256(cmd).hexdigest(), len(cmd))
+    with open(LOG, "a") as lf:
+        lf.write(line)
+    subprocess.run(["/usr/bin/logger", "-t", "ops-admin", line.strip()], check=False)
+    print("ops-admin: accepted " + line.strip(), file=sys.stderr)
+    env = {"PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+           "HOME": "/root", "LANG": "C.UTF-8", "TERM": "dumb"}
+    sys.exit(subprocess.run(["/bin/bash", "-s"], input=cmd, env=env, cwd="/root").returncode)
+
+
+if __name__ == "__main__":
+    main()
