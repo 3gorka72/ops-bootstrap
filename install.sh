@@ -27,14 +27,23 @@ RV=2.338.2; RSHA=baebf204307bac6193480852732f0aba2ae97b6c5597c244f4d5558390147c4
 UNIT="actions.runner.3gorka72-ops-admin.${LABEL}.service"
 
 # 1. user
-id "$U" >/dev/null 2>&1 || useradd --system --create-home --home-dir "/var/lib/$U" --shell /usr/sbin/nologin "$U"
+CREATED=0
+if id "$U" >/dev/null 2>&1; then
+  # An existing user is only accepted if it is ours from an earlier run of this installer for the same alias.
+  [ "$(cat /etc/ops-admin/host 2>/dev/null)" = "$ALIAS" ] || die "пользователь $U уже есть, но не от этой установки; ничего не трогаю"
+else
+  [ ! -e "/var/lib/$U" ] || die "/var/lib/$U уже существует; ничего не трогаю"
+  useradd --system --create-home --home-dir "/var/lib/$U" --shell /usr/sbin/nologin "$U"; CREATED=1
+fi
 if id -nG "$U" | tr ' ' '\n' | grep -qx docker; then die "$U в группе docker"; fi
 # Nothing the runner user starts may outlive a job: no cron, no at, no linger, no writable home.
 for f in /etc/cron.deny /etc/at.deny; do touch "$f"; grep -qx "$U" "$f" || echo "$U" >> "$f"; done
 if [ -f /etc/cron.allow ]; then sed -i "/^${U}\$/d" /etc/cron.allow; fi
 if [ -f /etc/at.allow ]; then sed -i "/^${U}\$/d" /etc/at.allow; fi
 command -v loginctl >/dev/null && loginctl disable-linger "$U" 2>/dev/null || true
-find "/var/lib/$U" -mindepth 1 -delete; chown root:root "/var/lib/$U"; chmod 0755 "/var/lib/$U"
+# Empty the home only when this run created it (it then holds just /etc/skel copies).
+[ "$CREATED" = 1 ] && find "/var/lib/$U" -mindepth 1 -delete
+chown root:root "/var/lib/$U"; chmod 0755 "/var/lib/$U"
 
 # 2. wrapper, host file, state, log, sudoers (exact path, no args)
 install -o root -g root -m 0755 "$HERE/sbin/ops-admin" /usr/local/sbin/ops-admin
@@ -55,7 +64,7 @@ install -o root -g root -m 0440 "$tmp" "/etc/sudoers.d/ops-admin-$ALIAS"; rm -f 
 if [ -f "$DIR/.runner" ]; then
   echo "Сборщик $LABEL уже зарегистрирован"
 else
-  # Non-interactive installs (e.g. over ssh by the hands) may pass the token in RUNNER_TOKEN, read from stdin.
+  # Non-interactive installs (e.g. over ssh by the hands, without a tty) pass the token in RUNNER_TOKEN, read from stdin.
   TOKEN="${RUNNER_TOKEN:-}"; unset RUNNER_TOKEN
   if [ -z "$TOKEN" ]; then read -rsp "Вставьте токен GitHub (ops-admin) и нажмите Enter (символы не видны): " TOKEN </dev/tty; echo; fi
   [ -n "$TOKEN" ] || die "пустой токен"
@@ -64,8 +73,10 @@ else
   curl -fsSL -o "$tgz" "https://github.com/actions/runner/releases/download/v$RV/actions-runner-linux-x64-$RV.tar.gz"
   echo "$RSHA  $tgz" | sha256sum -c - >/dev/null || die "контрольная сумма сборщика не сошлась"
   tar -xzf "$tgz" -C "$DIR"; rm -f "$tgz"; chown -R "$U:$U" "$DIR"
-  (cd "$DIR" && sudo -u "$U" -H ./config.sh --unattended --url https://github.com/3gorka72/ops-admin \
-    --token "$TOKEN" --name "$LABEL" --labels "$LABEL" --no-default-labels --disableupdate >/dev/null)
+  # The token reaches config.sh through the environment (runner input ACTIONS_RUNNER_INPUT_TOKEN), never argv.
+  (cd "$DIR" && export ACTIONS_RUNNER_INPUT_TOKEN="$TOKEN" && sudo --preserve-env=ACTIONS_RUNNER_INPUT_TOKEN -u "$U" -H \
+    ./config.sh --unattended --url https://github.com/3gorka72/ops-admin \
+    --name "$LABEL" --labels "$LABEL" --no-default-labels --disableupdate >/dev/null)
   unset TOKEN
   (cd "$DIR" && ./svc.sh install "$U" >/dev/null)
 fi
