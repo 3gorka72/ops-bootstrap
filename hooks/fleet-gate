@@ -1,0 +1,53 @@
+#!/usr/bin/python3 -I
+"""Runner job-started hook (ACTIONS_RUNNER_HOOK_JOB_STARTED) for the fleet-<alias> runner (hourly fleet check).
+
+Same design as hooks/job-gate, for a runner that has no root path at all: it fails the job before any step runs
+unless it is fleet-hourly.yml of 3gorka72/ops-admin on main, started by its schedule or dispatched manually. It trusts
+the event payload the runner writes at a fixed path under this runner's _work/_temp, not workflow-set environment.
+Installed root-owned by install-fleet.sh with the runner directory substituted.
+"""
+import json
+import os
+import sys
+
+EVENT = "@RUNNER_DIR@/_work/_temp/_github_workflow/event.json"  # substituted at install; no env override
+REPO = "3gorka72/ops-admin"
+ALLOWED = {".github/workflows/fleet-hourly.yml"}
+EVENTS = {"schedule", "workflow_dispatch"}
+
+
+def refuse(msg):
+    print("fleet job gate: refused: " + msg, file=sys.stderr)
+    sys.exit(1)
+
+
+def main():
+    name = os.environ.get("GITHUB_EVENT_NAME")
+    if name not in EVENTS:
+        refuse("event %r not allowed" % name)
+    try:
+        with open(EVENT) as f:
+            ev = json.load(f)
+    except (OSError, ValueError):
+        refuse("no readable event payload")
+    if not isinstance(ev, dict):
+        refuse("event payload is not an object")
+    if (ev.get("repository") or {}).get("full_name") != REPO:
+        refuse("repository")
+    # workflow_dispatch payloads carry ref and workflow; schedule payloads carry schedule and may omit them.
+    if name == "workflow_dispatch" or "ref" in ev:
+        if ev.get("ref") != "refs/heads/main":
+            refuse("ref %r is not main" % ev.get("ref"))
+    if name == "workflow_dispatch" or "workflow" in ev:
+        if ev.get("workflow") not in ALLOWED:
+            refuse("workflow %r not allowed" % ev.get("workflow"))
+    if name == "schedule" and not ev.get("schedule"):
+        refuse("schedule event without a schedule")
+    wref = os.environ.get("GITHUB_WORKFLOW_REF", "")
+    if wref not in {"%s/%s@refs/heads/main" % (REPO, w) for w in ALLOWED}:
+        refuse("workflow ref %r" % wref)
+    print("fleet job gate: ok %s %s" % (name, wref.split("@")[0].rsplit("/", 1)[-1]))
+
+
+if __name__ == "__main__":
+    main()
