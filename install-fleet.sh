@@ -93,6 +93,9 @@ echo "ACTIONS_RUNNER_HOOK_JOB_STARTED=$G.sh" >> "$DIR/.env.tmp"
 mv "$DIR/.env.tmp" "$DIR/.env"
 touch "$DIR/.fleet-install"
 chown -R root:root "$DIR"; chmod 0755 "$DIR"
+# Explicit modes: under a umask 077 caller (ops-admin run) .env/.service came out 0600 and the listener could not
+# read .env (13 Nov, hub). Root-owned, world-readable, no secrets in them.
+chmod 0644 "$DIR/.env" "$DIR/.path" "$DIR/.service" "$DIR/.fleet-install"
 install -d -o "$U" -g "$U" -m 0750 "$DIR/_work" "$DIR/_diag"
 chown -R "$U:$U" "$DIR/_work" "$DIR/_diag"
 for f in .runner .credentials .credentials_rsaparams; do
