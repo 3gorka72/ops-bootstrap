@@ -48,3 +48,12 @@ The owner receives the exact two lines, with the commit sha and the tarball sha2
 1. Immediately: `rm /etc/sudoers.d/ops-admin-<alias>`
 2. Stop the runner: `cd /opt/admin-runner-<alias> && ./svc.sh stop && ./svc.sh uninstall`
 3. Remove it in GitHub: ops-admin → Settings → Actions → Runners → `admin-<alias>` → Remove.
+
+## Fleet-check runner (`install-fleet.sh`)
+
+`install-fleet.sh <alias>` registers a second, separate runner `fleet-<alias>` for the hourly fleet check
+(`ops-admin` workflow `fleet-hourly.yml`). It reuses the admin installer's user rules (UID 59000-59999, nologin,
+no docker, cron/at denied, no linger, root-owned home and runner directory) but has **no sudoers entry and no wrapper
+access**: the job only calls the GitHub API with its own token. Its root-owned job gate (`hooks/fleet-gate`) admits only
+`fleet-hourly.yml` of `3gorka72/ops-admin` on `main`, started by its schedule or dispatched manually. The only writable
+path outside the runner's `_work`/`_diag` is `/var/lib/fleet-hourly` (0700, data only). Tests: `python3 -I tests/test_fleet_gate.py`.
