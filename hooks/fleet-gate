@@ -12,7 +12,7 @@ import sys
 
 EVENT = "@RUNNER_DIR@/_work/_temp/_github_workflow/event.json"  # substituted at install; no env override
 REPO = "3gorka72/ops-admin"
-ALLOWED = {".github/workflows/fleet-hourly.yml"}
+ALLOWED = {".github/workflows/fleet-hourly.yml", ".github/workflows/channel-feed.yml"}
 EVENTS = {"schedule", "workflow_dispatch"}
 
 
