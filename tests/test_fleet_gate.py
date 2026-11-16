@@ -40,6 +40,8 @@ cases = [
     ("channel-feed on schedule", SCHED, {"wref": OK_REF.replace("fleet-hourly", "channel-feed")}, 0),
     ("channel-feed manual dispatch", dict(DISP, workflow=".github/workflows/channel-feed.yml"),
      {"env_event": "workflow_dispatch", "wref": OK_REF.replace("fleet-hourly", "channel-feed")}, 0),
+    ("leak-scan manual dispatch", dict(DISP, workflow=".github/workflows/leak-scan.yml"),
+     {"env_event": "workflow_dispatch", "wref": OK_REF.replace("fleet-hourly", "leak-scan")}, 0),
     ("schedule payload naming another workflow", dict(SCHED, workflow=".github/workflows/evil.yml"), {}, 1),
     ("schedule payload with branch ref", dict(SCHED, ref="refs/heads/x"), {}, 1),
     ("schedule without schedule key", {"repository": REPO}, {}, 1),
