@@ -12,6 +12,11 @@ ALIAS="${1:-}"
 [ "$(id -u)" = 0 ] || die "нужен root"
 command -v python3 >/dev/null || die "нет python3"
 command -v curl >/dev/null || die "нет curl"
+# snap curl runs confined with a private /tmp and cannot write outside $HOME: the download would be
+# invisible to sha256sum/tar (indexer box, 23 Nov). Require the distro curl.
+case "$(command -v curl)|$(readlink -f "$(command -v curl)")" in
+  /snap/*|*/usr/bin/snap) die "curl установлен из snap; выполните: snap remove curl && apt-get install -y curl, затем запустите снова";;
+esac
 HERE=$(cd "$(dirname "$0")" && pwd)
 
 echo "Сервер: $(hostname -f)   имя для установки: $ALIAS"
@@ -71,10 +76,11 @@ else
   TOKEN=${TOKEN//$'\r'/}; TOKEN=${TOKEN// /}
   [ -n "$TOKEN" ] || die "пустой токен"
   install -d -o "$U" -g "$U" -m 0750 "$DIR"
-  tgz="/tmp/actions-runner-$RV.tgz"
+  dl=$(mktemp -d -p /var/tmp ops-runner.XXXXXX); tgz="$dl/actions-runner-$RV.tgz"
   curl -fsSL -o "$tgz" "https://github.com/actions/runner/releases/download/v$RV/actions-runner-linux-x64-$RV.tar.gz"
-  echo "$RSHA  $tgz" | sha256sum -c - >/dev/null || die "контрольная сумма сборщика не сошлась"
-  tar -xzf "$tgz" -C "$DIR"; rm -f "$tgz"; chown -R "$U:$U" "$DIR"
+  [ -s "$tgz" ] || { rm -rf "$dl"; die "архив сборщика не скачался (нет доступа к github.com?)"; }
+  echo "$RSHA  $tgz" | sha256sum -c - >/dev/null || { rm -rf "$dl"; die "контрольная сумма сборщика не сошлась"; }
+  tar -xzf "$tgz" -C "$DIR"; rm -rf "$dl"; chown -R "$U:$U" "$DIR"
   (cd "$DIR" && export ACTIONS_RUNNER_INPUT_TOKEN="$TOKEN" && sudo --preserve-env=ACTIONS_RUNNER_INPUT_TOKEN -u "$U" -H \
     ./config.sh --unattended --url https://github.com/3gorka72/ops-admin \
     --name "$LABEL" --labels "$LABEL" --no-default-labels --disableupdate >/dev/null)
